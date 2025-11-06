@@ -13,6 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $building_id = $_POST['building_id'];
         $rule_title = $_POST['rule_title'];
         $rule_content = $_POST['rule_content'];
+        $rule_id = $_POST['rule_id'];
 
         // Validate that the building belongs to the owner
         $stmt = $conn->prepare("SELECT id FROM buildings WHERE id = ? AND owner_id = ?");
@@ -20,8 +21,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute();
         $result = $stmt->get_result();
         if ($result->num_rows > 0) {
-            $stmt = $conn->prepare("INSERT INTO rules (building_id, rule_title, rule_content) VALUES (?, ?, ?)");
-            $stmt->bind_param("iss", $building_id, $rule_title, $rule_content);
+            if (empty($rule_id)) {
+                // Add new rule
+                $stmt = $conn->prepare("INSERT INTO rules (building_id, rule_title, rule_content) VALUES (?, ?, ?)");
+                $stmt->bind_param("iss", $building_id, $rule_title, $rule_content);
+            } else {
+                // Update existing rule
+                $stmt = $conn->prepare("UPDATE rules SET building_id = ?, rule_title = ?, rule_content = ? WHERE id = ? AND building_id IN (SELECT id FROM buildings WHERE owner_id = ?)");
+                $stmt->bind_param("issii", $building_id, $rule_title, $rule_content, $rule_id, $owner_id);
+            }
             $stmt->execute();
         }
     } elseif (isset($_POST['delete_rule'])) {
@@ -45,7 +53,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $buildings = $conn->query("SELECT id, building_name FROM buildings WHERE owner_id = $owner_id");
 
 // Get existing rules
-$rules = $conn->query("SELECT r.id, r.rule_title, r.rule_content, b.building_name FROM rules r JOIN buildings b ON r.building_id = b.id WHERE b.owner_id = $owner_id ORDER BY b.building_name, r.created_at DESC");
+$rules = $conn->query("SELECT r.id, r.building_id, r.rule_title, r.rule_content, b.building_name FROM rules r JOIN buildings b ON r.building_id = b.id WHERE b.owner_id = $owner_id ORDER BY b.building_name, r.created_at DESC");
+
+$rules_data = [];
+while ($row = $rules->fetch_assoc()) {
+    $rules_data[] = $row;
+}
+$rules->data_seek(0);
 
 ?>
 <!DOCTYPE html>
@@ -129,15 +143,18 @@ $rules = $conn->query("SELECT r.id, r.rule_title, r.rule_content, b.building_nam
             <div class="col-md-4">
                 <div class="card">
 					<div class="card-header text-white" style="background-color: #3498db;">
-						<h5><i class="fas fa-plus"></i> Add New Rule</h5>
+						<h5 id="form-title"><i class="fas fa-plus"></i> Add New Rule</h5>
 					</div>
                     <div class="card-body">
-                        <form method="POST">
+                        <form method="POST" id="rule-form">
+                            <input type="hidden" name="rule_id" id="rule_id">
                             <div class="mb-3">
                                 <label for="building_id" class="form-label">Select Building</label>
                                 <select class="form-select" id="building_id" name="building_id" required>
                                     <option value="">Choose a building...</option>
-                                    <?php while ($building = $buildings->fetch_assoc()): ?>
+                                    <?php 
+                                    $buildings->data_seek(0);
+                                    while ($building = $buildings->fetch_assoc()): ?>
                                     <option value="<?php echo $building['id']; ?>"><?php echo htmlspecialchars($building['building_name']); ?></option>
                                     <?php endwhile; ?>
                                 </select>
@@ -150,8 +167,11 @@ $rules = $conn->query("SELECT r.id, r.rule_title, r.rule_content, b.building_nam
                                 <label for="rule_content" class="form-label">Rule Details</label>
                                 <textarea class="form-control" id="rule_content" name="rule_content" rows="5" required></textarea>
                             </div>
-                            <button type="submit" name="add_rule" class="btn btn-primary w-40">
+                            <button type="submit" name="add_rule" id="submit-button" class="btn btn-primary w-40">
                                 <i class="fas fa-plus"></i> Add Rule
+                            </button>
+                            <button type="button" id="cancel-edit" class="btn btn-secondary w-40 d-none">
+                                <i class="fas fa-times"></i> Cancel
                             </button>
                         </form>
                     </div>
@@ -166,34 +186,56 @@ $rules = $conn->query("SELECT r.id, r.rule_title, r.rule_content, b.building_nam
                         <?php if ($rules->num_rows > 0): ?>
                         <div class="accordion" id="rulesAccordion">
                             <?php 
-                            $current_building = '';
-                            while ($rule = $rules->fetch_assoc()): 
-                                if ($current_building != $rule['building_name']) {
-                                    if ($current_building != '') echo '</div></div>'; // Close previous building's accordion item body
-                                    $current_building = $rule['building_name'];
-                                    echo '<h4>' . htmlspecialchars($current_building) . '</h4>';
-                                }
+                            $grouped_rules = [];
+                            foreach ($rules_data as $rule) {
+                                $grouped_rules[$rule['building_name']][] = $rule;
+                            }
+                            
+                            foreach ($grouped_rules as $building_name => $rules_in_building): 
                             ?>
-                                <div class="accordion-item">
-                                    <h2 class="accordion-header" id="heading<?php echo $rule['id']; ?>">
-                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse<?php echo $rule['id']; ?>" aria-expanded="false" aria-controls="collapse<?php echo $rule['id']; ?>">
-                                            <?php echo htmlspecialchars($rule['rule_title']); ?>
-                                        </button>
-                                    </h2>
-                                    <div id="collapse<?php echo $rule['id']; ?>" class="accordion-collapse collapse" aria-labelledby="heading<?php echo $rule['id']; ?>" data-bs-parent="#rulesAccordion">
-                                        <div class="accordion-body">
-                                            <?php echo nl2br(htmlspecialchars($rule['rule_content'])); ?>
-                                            <hr>
-                                            <form method="POST" class="d-inline">
-                                                <input type="hidden" name="rule_id" value="<?php echo $rule['id']; ?>">
-                                                <button type="submit" name="delete_rule" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to delete this rule?');">
-                                                    <i class="fas fa-trash"></i> Delete
+                            <div class="accordion-item mb-3">
+                                <h2 class="accordion-header">
+                                    <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-<?php echo md5($building_name); ?>" aria-expanded="true">
+                                        <strong><?php echo htmlspecialchars($building_name); ?></strong>
+                                    </button>
+                                </h2>
+                                <div id="collapse-<?php echo md5($building_name); ?>" class="accordion-collapse collapse show">
+                                    <div class="accordion-body">
+                                        <?php foreach ($rules_in_building as $rule): ?>
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="heading<?php echo $rule['id']; ?>">
+                                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse<?php echo $rule['id']; ?>" aria-expanded="false">
+                                                    <?php echo htmlspecialchars($rule['rule_title']); ?>
                                                 </button>
-                                            </form>
+                                            </h2>
+                                            <div id="collapse<?php echo $rule['id']; ?>" class="accordion-collapse collapse" aria-labelledby="heading<?php echo $rule['id']; ?>">
+                                                <div class="accordion-body">
+                                                    <?php echo nl2br(htmlspecialchars($rule['rule_content'])); ?>
+                                                    <hr>
+                                                    <button class="btn btn-sm edit-btn"
+                                                        style="background-color: #a2d8fc; color: white; border: none;"
+                                                        data-id="<?php echo $rule['id']; ?>" 
+                                                        data-building_id="<?php echo $rule['building_id']; ?>" 
+                                                        data-title="<?php echo htmlspecialchars($rule['rule_title']); ?>" 
+                                                        data-content="<?php echo htmlspecialchars($rule['rule_content']); ?>">
+                                                        <i class="fas fa-edit"></i>
+                                                    </button>
+                                                    <form method="POST" class="d-inline">
+                                                        <input type="hidden" name="rule_id" value="<?php echo $rule['id']; ?>">
+                                                        <button type="submit" name="delete_rule"
+                                                            class="btn btn-sm" style="background-color: #fcbcae; color: white; border: none;"
+                                                            onclick="return confirm('Are you sure you want to delete this rule?');">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </div>
                                         </div>
+                                        <?php endforeach; ?>
                                     </div>
                                 </div>
-                            <?php endwhile; ?>
+                            </div>
+                            <?php endforeach; ?>
                         </div>
                         <?php else: ?>
                         <div class="text-center py-4">
@@ -208,5 +250,39 @@ $rules = $conn->query("SELECT r.id, r.rule_title, r.rule_content, b.building_nam
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const rules = <?php echo json_encode($rules_data); ?>;
+        const ruleForm = document.getElementById('rule-form');
+        const ruleIdInput = document.getElementById('rule_id');
+        const buildingIdInput = document.getElementById('building_id');
+        const ruleTitleInput = document.getElementById('rule_title');
+        const ruleContentInput = document.getElementById('rule_content');
+        const formTitle = document.getElementById('form-title');
+        const submitButton = document.getElementById('submit-button');
+        const cancelButton = document.getElementById('cancel-edit');
+
+        document.querySelectorAll('.edit-btn').forEach(button => {
+            button.addEventListener('click', () => {
+                const ruleId = button.dataset.id;
+                const rule = rules.find(r => r.id == ruleId);
+
+                formTitle.innerHTML = '<i class="fas fa-edit"></i> Edit Rule';
+                submitButton.innerHTML = '<i class="fas fa-save"></i> Update Rule';
+                ruleIdInput.value = rule.id;
+                buildingIdInput.value = rule.building_id;
+                ruleTitleInput.value = rule.rule_title;
+                ruleContentInput.value = rule.rule_content;
+                cancelButton.classList.remove('d-none');
+            });
+        });
+
+        cancelButton.addEventListener('click', () => {
+            formTitle.innerHTML = '<i class="fas fa-plus"></i> Add New Rule';
+            submitButton.innerHTML = '<i class="fas fa-plus"></i> Add Rule';
+            ruleForm.reset();
+            ruleIdInput.value = '';
+            cancelButton.classList.add('d-none');
+        });
+    </script>
 </body>
 </html>

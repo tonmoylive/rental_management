@@ -259,7 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         <div class="register-header">
             <i class="fas fa-user-plus"></i>
             <h3>Owner Registration</h3>
-            <p class="mb-0">Join Our Community</p>
+            <p class="mb-0">Join RentFlow Community</p>
         </div>
         <div class="register-body">
             <?php if ($error): ?>
@@ -343,17 +343,23 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     <script>
         document.querySelectorAll('.plan-card').forEach(card => {
             card.addEventListener('click', function() {
-                document.querySelectorAll('.plan-card').forEach(innerCard => {
-                    innerCard.classList.remove('selected');
-                });
-                this.classList.add('selected');
                 this.querySelector('input[type="radio"]').checked = true;
+                updateSelectedState();
             });
-            // Set initial selected state if a plan is pre-selected (e.g., after form submission error)
-            if (this.querySelector('input[type="radio"]').checked) {
-                this.classList.add('selected');
-            }
         });
+
+        function updateSelectedState() {
+            document.querySelectorAll('.plan-card').forEach(card => {
+                if (card.querySelector('input[type="radio"]').checked) {
+                    card.classList.add('selected');
+                } else {
+                    card.classList.remove('selected');
+                }
+            });
+        }
+
+        // Set initial state on page load
+        updateSelectedState();
     </script>
 </body>
 </html>
